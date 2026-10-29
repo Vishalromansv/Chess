@@ -520,8 +520,10 @@ elif menu == "📋 Match List":
 # ----------------------------------------------------
 # 5. LIVE CHESS CLOCK
 # ----------------------------------------------------
+# ----------------------------------------------------
+# 5. LIVE CHESS CLOCK (FULL-SCREEN DUAL TOUCH CLOCK)
+# ----------------------------------------------------
 elif menu == "⏱️ Live Chess Clock":
-    st.title("⏱️ Live Chess Clock")
     conn = get_connection()
     t_id = st.session_state.current_tournament_id
     
@@ -548,89 +550,308 @@ elif menu == "⏱️ Live Chess Clock":
             """, (active_m_id,)).fetchone()
             
             if match:
-                stage_title = "🏆 GRAND FINAL" if match['group_name'] == 'Grand Final' else f"League Round {match['round_num']}"
-                st.subheader(f"{stage_title}: {match['white_name']} vs {match['black_name']}")
-                
                 clock_key = f"clock_{match['id']}"
                 if clock_key not in st.session_state:
                     st.session_state[clock_key] = {
                         'white_time': match['white_time_left'],
                         'black_time': match['black_time_left'],
-                        'active': match['active_clock'],
+                        'active': match['active_clock'] if match['active_clock'] else 'white',
                         'running': bool(match['clock_running']),
+                        'white_moves': 0,
+                        'black_moves': 0,
                         'last_tick': time.time()
                     }
                 c_state = st.session_state[clock_key]
                 
+                # Dedicated CSS for the exact mobile chess clock layout
+                st.markdown("""
+                <style>
+                    /* Maximize screen area for mobile */
+                    .block-container {
+                        padding-top: 0.5rem !important;
+                        padding-bottom: 0.5rem !important;
+                        padding-left: 0.5rem !important;
+                        padding-right: 0.5rem !important;
+                        max-width: 600px !important;
+                        margin: 0 auto !important;
+                    }
+                    
+                    /* Clock Container Box */
+                    .clock-frame {
+                        display: flex;
+                        flex-direction: column;
+                        width: 100%;
+                        border-radius: 16px;
+                        overflow: hidden;
+                        box-shadow: 0 10px 30px rgba(0,0,0,0.6);
+                        user-select: none;
+                        -webkit-user-select: none;
+                    }
+                    
+                    /* Relative Box wrapper to allow 100% overlay clickable button */
+                    .clock-touch-half {
+                        position: relative;
+                        width: 100%;
+                        height: 38vh;
+                        min-height: 230px;
+                        margin: 0;
+                        padding: 0;
+                    }
+                    
+                    /* The Visual Display Panel */
+                    .clock-visual-panel {
+                        position: absolute;
+                        top: 0;
+                        left: 0;
+                        width: 100%;
+                        height: 100%;
+                        display: flex;
+                        flex-direction: column;
+                        justify-content: center;
+                        align-items: center;
+                        box-sizing: border-box;
+                        transition: background-color 0.2s ease;
+                    }
+                    
+                    /* Invert Top Clock 180° for the Opponent */
+                    .top-inverted {
+                        transform: rotate(180deg);
+                    }
+                    
+                    /* Active Color: Chess.com Olive Green */
+                    .clock-visual-panel.active-green {
+                        background-color: #7fa650 !important;
+                    }
+                    .clock-visual-panel.active-green .clock-digits {
+                        color: #ffffff !important;
+                    }
+                    .clock-visual-panel.active-green .moves-badge,
+                    .clock-visual-panel.active-green .player-tag {
+                        color: rgba(255, 255, 255, 0.85) !important;
+                    }
+                    
+                    /* Inactive Color: Muted Gray */
+                    .clock-visual-panel.inactive-gray {
+                        background-color: #8b8987 !important;
+                    }
+                    .clock-visual-panel.inactive-gray .clock-digits {
+                        color: #262421 !important;
+                    }
+                    .clock-visual-panel.inactive-gray .moves-badge,
+                    .clock-visual-panel.inactive-gray .player-tag {
+                        color: rgba(38, 36, 33, 0.8) !important;
+                    }
+                    
+                    /* Huge Clock Digits */
+                    .clock-digits {
+                        font-size: clamp(74px, 20vw, 108px);
+                        font-weight: 900;
+                        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+                        line-height: 1;
+                        margin: 0;
+                        letter-spacing: -2px;
+                    }
+                    
+                    .moves-badge {
+                        position: absolute;
+                        bottom: 14px;
+                        left: 20px;
+                        font-size: 16px;
+                        font-weight: 700;
+                    }
+                    
+                    .player-tag {
+                        position: absolute;
+                        top: 14px;
+                        left: 20px;
+                        font-size: 17px;
+                        font-weight: 800;
+                        text-transform: uppercase;
+                    }
+                    
+                    /* Makes Streamlit Button 100% transparent and covers the WHOLE color box */
+                    .clock-touch-half div[data-testid="stButton"] button {
+                        position: absolute !important;
+                        top: 0 !important;
+                        left: 0 !important;
+                        width: 100% !important;
+                        height: 100% !important;
+                        opacity: 0 !important;
+                        z-index: 50 !important;
+                        cursor: pointer !important;
+                        border: none !important;
+                        margin: 0 !important;
+                        padding: 0 !important;
+                    }
+                    
+                    /* Dark Center Control Bar */
+                    .center-control-bar {
+                        background-color: #262421;
+                        padding: 6px 10px;
+                        display: flex;
+                        justify-content: space-around;
+                        align-items: center;
+                        z-index: 60;
+                        border-top: 2px solid #1a1816;
+                        border-bottom: 2px solid #1a1816;
+                    }
+                    .center-control-bar button {
+                        background-color: #383531 !important;
+                        color: #ffffff !important;
+                        font-size: 20px !important;
+                        font-weight: bold !important;
+                        border-radius: 8px !important;
+                        min-height: 44px !important;
+                        height: 44px !important;
+                        border: none !important;
+                    }
+                    .center-control-bar button:hover {
+                        background-color: #4a4641 !important;
+                    }
+                </style>
+                """, unsafe_allow_html=True)
+
                 def fmt_time(secs):
-                    return f"{int(secs // 60):02d}:{int(secs % 60):02d}"
+                    m = int(secs // 60)
+                    s = int(secs % 60)
+                    return f"{m}:{s:02d}"
 
-                w_bg = "rgba(15, 164, 175, 0.45)" if c_state['active'] == 'white' else "rgba(0, 36, 40, 0.92)"
-                w_color = "#964734" if c_state['white_time'] < 30 else "#ffffff"
-                st.markdown(f"<div style='background-color:{w_bg};border:3px solid #0FA4AF;border-radius:16px;padding:20px;text-align:center;margin-bottom:10px;'><h3 style='color:#AFDDE5;margin:0;'>♔ WHITE: {match['white_name']}</h3><h1 style='font-size:60px;font-family:monospace;color:{w_color};margin:8px 0;'>{fmt_time(c_state['white_time'])}</h1></div>", unsafe_allow_html=True)
+                top_is_active = (c_state['active'] == 'black' and c_state['running'])
+                bottom_is_active = (c_state['active'] == 'white' and c_state['running'])
+
+                top_class = "active-green" if top_is_active else "inactive-gray"
+                bottom_class = "active-green" if bottom_is_active else "inactive-gray"
                 
-                if st.button("👆 TAP AFTER WHITE MOVES (Start Black's Clock)", key="tap_white"):
-                    if c_state['running'] and c_state['active'] == 'white':
+                b_time_str = fmt_time(c_state['black_time'])
+                w_time_str = fmt_time(c_state['white_time'])
+
+                st.markdown("<div class='clock-frame'>", unsafe_allow_html=True)
+
+                # ================= TOP HALF (BLACK - ROTATED 180°) =================
+                st.markdown(f"""
+                <div class="clock-touch-half">
+                    <div class="clock-visual-panel top-inverted {top_class}">
+                        <div class="player-tag">♚ {match['black_name']}</div>
+                        <div class="clock-digits">{b_time_str}</div>
+                        <div class="moves-badge">Moves: {c_state.get('black_moves', 0)}</div>
+                    </div>
+                """, unsafe_allow_html=True)
+                
+                # Invisible full-coverage button for Black
+                tap_black = st.button("TAP_BLACK_TRIGGER", key="tap_black_btn")
+                st.markdown("</div>", unsafe_allow_html=True)
+
+                # ================= CENTER CONTROL BAR =================
+                st.markdown("<div class='center-control-bar'>", unsafe_allow_html=True)
+                ctrl1, ctrl2, ctrl3, ctrl4 = st.columns(4)
+                with ctrl1:
+                    btn_reset = st.button("↻", key="c_reset", help="Reset Clocks")
+                with ctrl2:
+                    pause_symbol = "▶" if not c_state['running'] else "⏸"
+                    btn_pause = st.button(pause_symbol, key="c_pause", help="Pause / Resume")
+                with ctrl3:
+                    btn_finish = st.button("🏁", key="c_finish", help="End Game & Select Winner")
+                with ctrl4:
+                    btn_list = st.button("📋", key="c_list", help="Back to Match List")
+                st.markdown("</div>", unsafe_allow_html=True)
+
+                # ================= BOTTOM HALF (WHITE - NORMAL ORIENTATION) =================
+                st.markdown(f"""
+                <div class="clock-touch-half">
+                    <div class="clock-visual-panel {bottom_class}">
+                        <div class="player-tag">♔ {match['white_name']}</div>
+                        <div class="clock-digits">{w_time_str}</div>
+                        <div class="moves-badge">Moves: {c_state.get('white_moves', 0)}</div>
+                    </div>
+                """, unsafe_allow_html=True)
+                
+                # Invisible full-coverage button for White
+                tap_white = st.button("TAP_WHITE_TRIGGER", key="tap_white_btn")
+                st.markdown("</div>", unsafe_allow_html=True)
+
+                st.markdown("</div>", unsafe_allow_html=True) # End clock-frame
+
+                # ================= TAP & INTERACTION LOGIC =================
+                # 1. White Taps (Bottom)
+                if tap_white:
+                    if not c_state['running']:
+                        # First move of the game starts Black's clock
+                        c_state['running'] = True
                         c_state['active'] = 'black'
+                        c_state['white_moves'] = c_state.get('white_moves', 0) + 1
                         c_state['white_time'] += match['increment_secs']
-                    elif not c_state['running']:
-                        c_state['running'] = True
-                        c_state['active'] = 'white'
-                    safe_rerun()
-
-                st.markdown("<br>", unsafe_allow_html=True)
-
-                b_bg = "rgba(150, 71, 52, 0.5)" if c_state['active'] == 'black' else "rgba(0, 36, 40, 0.92)"
-                b_color = "#964734" if c_state['black_time'] < 30 else "#ffffff"
-                st.markdown(f"<div style='background-color:{b_bg};border:3px solid #964734;border-radius:16px;padding:20px;text-align:center;margin-bottom:10px;'><h3 style='color:#AFDDE5;margin:0;'>♚ BLACK: {match['black_name']}</h3><h1 style='font-size:60px;font-family:monospace;color:{b_color};margin:8px 0;'>{fmt_time(c_state['black_time'])}</h1></div>", unsafe_allow_html=True)
-                
-                if st.button("👆 TAP AFTER BLACK MOVES (Start White's Clock)", key="tap_black"):
-                    if c_state['running'] and c_state['active'] == 'black':
-                        c_state['active'] = 'white'
-                        c_state['black_time'] += match['increment_secs']
-                    elif not c_state['running']:
-                        c_state['running'] = True
+                    elif c_state['active'] == 'white':
+                        # White completed their turn -> switch to Black
                         c_state['active'] = 'black'
+                        c_state['white_moves'] = c_state.get('white_moves', 0) + 1
+                        c_state['white_time'] += match['increment_secs']
                     safe_rerun()
-                        
-                st.markdown("---")
-                ctrl_cols = st.columns(2)
-                with ctrl_cols[0]:
-                    if st.button("⏯️ Pause / Resume"):
-                        c_state['running'] = not c_state['running']
-                        safe_rerun()
-                with ctrl_cols[1]:
-                    if st.button("🔄 Reset Clocks"):
-                        c_state['white_time'] = match['white_time_left']
-                        c_state['black_time'] = match['black_time_left']
-                        c_state['active'] = None
-                        c_state['running'] = False
-                        safe_rerun()
-                        
-                if st.button("🏁 Finish Game & Record Winner"):
+
+                # 2. Black Taps (Top)
+                if tap_black:
+                    if not c_state['running']:
+                        c_state['running'] = True
+                        c_state['active'] = 'white'
+                        c_state['black_moves'] = c_state.get('black_moves', 0) + 1
+                        c_state['black_time'] += match['increment_secs']
+                    elif c_state['active'] == 'black':
+                        # Black completed their turn -> switch to White
+                        c_state['active'] = 'white'
+                        c_state['black_moves'] = c_state.get('black_moves', 0) + 1
+                        c_state['black_time'] += match['increment_secs']
+                    safe_rerun()
+
+                # 3. Center Controls
+                if btn_pause:
+                    c_state['running'] = not c_state['running']
+                    safe_rerun()
+
+                if btn_reset:
+                    c_state['white_time'] = match['white_time_left']
+                    c_state['black_time'] = match['black_time_left']
+                    c_state['active'] = 'white'
+                    c_state['running'] = False
+                    c_state['white_moves'] = 0
+                    c_state['black_moves'] = 0
+                    safe_rerun()
+
+                if btn_finish:
                     c_state['running'] = False
                     st.session_state.show_result_modal = True
                     safe_rerun()
-                        
+
+                if btn_list:
+                    st.session_state.active_match_id = None
+                    safe_rerun()
+
+                # 4. Timer Countdown Loop
                 if c_state['running']:
                     now = time.time()
                     elapsed = now - c_state['last_tick']
                     c_state['last_tick'] = now
+                    
                     if c_state['active'] == 'white':
-                        c_state['white_time'] = max(0, c_state['white_time'] - elapsed)
+                        c_state['white_time'] = max(0.0, c_state['white_time'] - elapsed)
+                        if c_state['white_time'] <= 0:
+                            c_state['running'] = False
                     elif c_state['active'] == 'black':
-                        c_state['black_time'] = max(0, c_state['black_time'] - elapsed)
-                    time.sleep(0.5)
+                        c_state['black_time'] = max(0.0, c_state['black_time'] - elapsed)
+                        if c_state['black_time'] <= 0:
+                            c_state['running'] = False
+                            
+                    time.sleep(0.3)
                     safe_rerun()
                 else:
                     c_state['last_tick'] = time.time()
-                    
+
+                # 5. Result Recording Dialog
                 if st.session_state.get('show_result_modal', False):
+                    st.markdown("---")
                     st.markdown("### 🏆 Select Match Winner")
                     res_choice = st.radio("Outcome", [
-                        f"White Wins ({match['white_name']}) - 1-0",
-                        f"Black Wins ({match['black_name']}) - 0-1",
-                        "Draw - ½-½"
+                        f"♔ White Wins ({match['white_name']}) - 1-0",
+                        f"♚ Black Wins ({match['black_name']}) - 0-1",
+                        "🤝 Draw - ½-½"
                     ])
                     if st.button("💾 Save Match Result"):
                         result_str = "1-0" if "1-0" in res_choice else ("0-1" if "0-1" in res_choice else "½-½")
@@ -639,8 +860,9 @@ elif menu == "⏱️ Live Chess Clock":
                         check_or_create_grand_final(conn, t_id)
                         st.session_state.show_result_modal = False
                         st.session_state.active_match_id = None
-                        st.success("Result saved!")
+                        st.success("Result recorded successfully!")
                         safe_rerun()
+
     conn.close()
 
 # ----------------------------------------------------
