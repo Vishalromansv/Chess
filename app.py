@@ -516,16 +516,42 @@ elif menu == "📋 Match List":
                             check_or_create_grand_final(conn, t_id)
                             safe_rerun()
     conn.close()
-
 # ----------------------------------------------------
-# 5. LIVE CHESS CLOCK
-# ----------------------------------------------------
-# ----------------------------------------------------
-# 5. LIVE CHESS CLOCK (FULL-SCREEN DUAL TOUCH CLOCK)
+# 5. LIVE CHESS CLOCK (FULL-CARD TOUCH CLOCK - NO SEPARATE BUTTONS)
 # ----------------------------------------------------
 elif menu == "⏱️ Live Chess Clock":
+    import streamlit.components.v1 as components
     conn = get_connection()
     t_id = st.session_state.current_tournament_id
+    
+    # Handle match result / navigation query params sent from the touch clock
+    def check_clock_query_params():
+        params = st.query_params if hasattr(st, "query_params") else (
+            st.experimental_get_query_params() if hasattr(st, "experimental_get_query_params") else {}
+        )
+        if "finish_m_id" in params and "m_result" in params:
+            f_id = params["finish_m_id"][0] if isinstance(params["finish_m_id"], list) else params["finish_m_id"]
+            f_res = params["m_result"][0] if isinstance(params["m_result"], list) else params["m_result"]
+            conn.execute("UPDATE matches SET status = 'Completed', result = ? WHERE id = ?", (f_res, f_id))
+            conn.commit()
+            check_or_create_grand_final(conn, t_id)
+            if hasattr(st, "query_params"):
+                st.query_params.clear()
+            elif hasattr(st, "experimental_set_query_params"):
+                st.experimental_set_query_params()
+            st.session_state.active_match_id = None
+            st.success("Result recorded successfully!")
+            safe_rerun()
+            
+        if "nav_matches" in params:
+            if hasattr(st, "query_params"):
+                st.query_params.clear()
+            elif hasattr(st, "experimental_set_query_params"):
+                st.experimental_set_query_params()
+            st.session_state.active_match_id = None
+            safe_rerun()
+
+    check_clock_query_params()
     
     if not t_id:
         st.warning("No active tournament.")
@@ -541,7 +567,7 @@ elif menu == "⏱️ Live Chess Clock":
             st.info("No match selected. Go to **Match List** and tap **Play / Open Clock**.")
         else:
             match = conn.execute("""
-                SELECT m.*, wp.name as white_name, bp.name as black_name, t.increment_secs 
+                SELECT m.*, wp.name as white_name, bp.name as black_name, t.increment_secs, t.time_control_mins 
                 FROM matches m
                 JOIN players wp ON m.white_player_id = wp.id
                 JOIN players bp ON m.black_player_id = bp.id
@@ -550,321 +576,371 @@ elif menu == "⏱️ Live Chess Clock":
             """, (active_m_id,)).fetchone()
             
             if match:
-                clock_key = f"clock_{match['id']}"
-                if clock_key not in st.session_state:
-                    st.session_state[clock_key] = {
-                        'white_time': match['white_time_left'],
-                        'black_time': match['black_time_left'],
-                        'active': match['active_clock'] if match['active_clock'] else 'white',
-                        'running': bool(match['clock_running']),
-                        'white_moves': 0,
-                        'black_moves': 0,
-                        'last_tick': time.time()
-                    }
-                c_state = st.session_state[clock_key]
-                
-                # Dedicated CSS for the exact mobile chess clock layout
-                st.markdown("""
-                <style>
-                    /* Maximize screen area for mobile */
-                    .block-container {
-                        padding-top: 0.5rem !important;
-                        padding-bottom: 0.5rem !important;
-                        padding-left: 0.5rem !important;
-                        padding-right: 0.5rem !important;
-                        max-width: 600px !important;
-                        margin: 0 auto !important;
-                    }
-                    
-                    /* Clock Container Box */
-                    .clock-frame {
-                        display: flex;
-                        flex-direction: column;
-                        width: 100%;
-                        border-radius: 16px;
-                        overflow: hidden;
-                        box-shadow: 0 10px 30px rgba(0,0,0,0.6);
-                        user-select: none;
-                        -webkit-user-select: none;
-                    }
-                    
-                    /* Relative Box wrapper to allow 100% overlay clickable button */
-                    .clock-touch-half {
-                        position: relative;
-                        width: 100%;
-                        height: 38vh;
-                        min-height: 230px;
-                        margin: 0;
-                        padding: 0;
-                    }
-                    
-                    /* The Visual Display Panel */
-                    .clock-visual-panel {
-                        position: absolute;
-                        top: 0;
-                        left: 0;
-                        width: 100%;
-                        height: 100%;
-                        display: flex;
-                        flex-direction: column;
-                        justify-content: center;
-                        align-items: center;
-                        box-sizing: border-box;
-                        transition: background-color 0.2s ease;
-                    }
-                    
-                    /* Invert Top Clock 180° for the Opponent */
-                    .top-inverted {
-                        transform: rotate(180deg);
-                    }
-                    
-                    /* Active Color: Chess.com Olive Green */
-                    .clock-visual-panel.active-green {
-                        background-color: #7fa650 !important;
-                    }
-                    .clock-visual-panel.active-green .clock-digits {
-                        color: #ffffff !important;
-                    }
-                    .clock-visual-panel.active-green .moves-badge,
-                    .clock-visual-panel.active-green .player-tag {
-                        color: rgba(255, 255, 255, 0.85) !important;
-                    }
-                    
-                    /* Inactive Color: Muted Gray */
-                    .clock-visual-panel.inactive-gray {
-                        background-color: #8b8987 !important;
-                    }
-                    .clock-visual-panel.inactive-gray .clock-digits {
-                        color: #262421 !important;
-                    }
-                    .clock-visual-panel.inactive-gray .moves-badge,
-                    .clock-visual-panel.inactive-gray .player-tag {
-                        color: rgba(38, 36, 33, 0.8) !important;
-                    }
-                    
-                    /* Huge Clock Digits */
-                    .clock-digits {
-                        font-size: clamp(74px, 20vw, 108px);
-                        font-weight: 900;
-                        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-                        line-height: 1;
-                        margin: 0;
-                        letter-spacing: -2px;
-                    }
-                    
-                    .moves-badge {
-                        position: absolute;
-                        bottom: 14px;
-                        left: 20px;
-                        font-size: 16px;
-                        font-weight: 700;
-                    }
-                    
-                    .player-tag {
-                        position: absolute;
-                        top: 14px;
-                        left: 20px;
-                        font-size: 17px;
-                        font-weight: 800;
-                        text-transform: uppercase;
-                    }
-                    
-                    /* Makes Streamlit Button 100% transparent and covers the WHOLE color box */
-                    .clock-touch-half div[data-testid="stButton"] button {
-                        position: absolute !important;
-                        top: 0 !important;
-                        left: 0 !important;
-                        width: 100% !important;
-                        height: 100% !important;
-                        opacity: 0 !important;
-                        z-index: 50 !important;
-                        cursor: pointer !important;
-                        border: none !important;
-                        margin: 0 !important;
-                        padding: 0 !important;
-                    }
-                    
-                    /* Dark Center Control Bar */
-                    .center-control-bar {
-                        background-color: #262421;
-                        padding: 6px 10px;
-                        display: flex;
-                        justify-content: space-around;
-                        align-items: center;
-                        z-index: 60;
-                        border-top: 2px solid #1a1816;
-                        border-bottom: 2px solid #1a1816;
-                    }
-                    .center-control-bar button {
-                        background-color: #383531 !important;
-                        color: #ffffff !important;
-                        font-size: 20px !important;
-                        font-weight: bold !important;
-                        border-radius: 8px !important;
-                        min-height: 44px !important;
-                        height: 44px !important;
-                        border: none !important;
-                    }
-                    .center-control-bar button:hover {
-                        background-color: #4a4641 !important;
-                    }
-                </style>
-                """, unsafe_allow_html=True)
+                w_time = int(match['white_time_left']) if match['white_time_left'] else int(match['time_control_mins'] * 60)
+                b_time = int(match['black_time_left']) if match['black_time_left'] else int(match['time_control_mins'] * 60)
+                increment = int(match['increment_secs'])
+                match_id = int(match['id'])
+                w_name = str(match['white_name']).replace("'", "\\'")
+                b_name = str(match['black_name']).replace("'", "\\'")
 
-                def fmt_time(secs):
-                    m = int(secs // 60)
-                    s = int(secs % 60)
-                    return f"{m}:{s:02d}"
+                # Self-Contained Full Touch Dual Chess Clock
+                clock_html = f"""
+                <!DOCTYPE html>
+                <html>
+                <head>
+                    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+                    <style>
+                        * {{
+                            box-sizing: border-box;
+                            margin: 0;
+                            padding: 0;
+                            user-select: none;
+                            -webkit-user-select: none;
+                            -webkit-tap-highlight-color: transparent;
+                        }}
+                        body {{
+                            background-color: transparent;
+                            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+                            display: flex;
+                            justify-content: center;
+                            align-items: center;
+                            height: 100vh;
+                            overflow: hidden;
+                        }}
+                        .clock-wrapper {{
+                            width: 100%;
+                            max-width: 520px;
+                            height: 98vh;
+                            display: flex;
+                            flex-direction: column;
+                            justify-content: space-between;
+                            position: relative;
+                        }}
+                        
+                        /* The Full Clickable Boxes */
+                        .clock-card {{
+                            width: 100%;
+                            height: 44%;
+                            border-radius: 18px;
+                            display: flex;
+                            flex-direction: column;
+                            justify-content: center;
+                            align-items: center;
+                            position: relative;
+                            cursor: pointer;
+                            box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+                            transition: background-color 0.15s ease, transform 0.06s ease;
+                        }}
+                        .clock-card:active {{
+                            transform: scale(0.985);
+                        }}
+                        
+                        /* Inactive Color: Muted Gray */
+                        .clock-card.inactive {{
+                            background-color: #8b8987;
+                        }}
+                        .clock-card.inactive .timer-digits {{
+                            color: #262421;
+                        }}
+                        .clock-card.inactive .player-name,
+                        .clock-card.inactive .move-count {{
+                            color: rgba(38, 36, 33, 0.85);
+                        }}
+                        
+                        /* Active Turn: Chess Olive Green */
+                        .clock-card.active {{
+                            background-color: #7fa650;
+                        }}
+                        .clock-card.active .timer-digits {{
+                            color: #ffffff;
+                        }}
+                        .clock-card.active .player-name,
+                        .clock-card.active .move-count {{
+                            color: rgba(255, 255, 255, 0.95);
+                        }}
+                        
+                        /* Flagged / Timeout Red */
+                        .clock-card.timeout {{
+                            background-color: #d9534f !important;
+                        }}
+                        .clock-card.timeout .timer-digits {{
+                            color: #ffffff !important;
+                        }}
+                        
+                        .timer-digits {{
+                            font-size: clamp(80px, 22vw, 115px);
+                            font-weight: 900;
+                            line-height: 1;
+                            letter-spacing: -2px;
+                            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, monospace;
+                        }}
+                        .player-name {{
+                            position: absolute;
+                            top: 16px;
+                            left: 20px;
+                            font-size: 18px;
+                            font-weight: 800;
+                            text-transform: uppercase;
+                        }}
+                        .move-count {{
+                            position: absolute;
+                            bottom: 16px;
+                            right: 20px;
+                            font-size: 16px;
+                            font-weight: 700;
+                        }}
+                        
+                        /* Middle Control Bar */
+                        .middle-bar {{
+                            height: 52px;
+                            background-color: #262421;
+                            border-radius: 12px;
+                            display: flex;
+                            justify-content: space-around;
+                            align-items: center;
+                            padding: 0 10px;
+                            box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+                        }}
+                        .ctrl-btn {{
+                            background-color: #383531;
+                            border: none;
+                            color: #ffffff;
+                            font-size: 22px;
+                            font-weight: bold;
+                            width: 22%;
+                            height: 38px;
+                            border-radius: 8px;
+                            display: flex;
+                            justify-content: center;
+                            align-items: center;
+                            cursor: pointer;
+                        }}
+                        .ctrl-btn:active {{
+                            background-color: #524e47;
+                        }}
+                        
+                        /* Result Modal Overlay */
+                        #result-modal {{
+                            display: none;
+                            position: absolute;
+                            top: 0;
+                            left: 0;
+                            width: 100%;
+                            height: 100%;
+                            background: rgba(0, 31, 35, 0.95);
+                            border-radius: 18px;
+                            z-index: 100;
+                            flex-direction: column;
+                            justify-content: center;
+                            align-items: center;
+                            padding: 24px;
+                            text-align: center;
+                        }}
+                        .modal-title {{
+                            color: #AFDDE5;
+                            font-size: 24px;
+                            font-weight: 800;
+                            margin-bottom: 20px;
+                        }}
+                        .modal-btn {{
+                            background-color: #0FA4AF;
+                            color: #002225;
+                            border: none;
+                            border-radius: 10px;
+                            padding: 14px 20px;
+                            font-size: 18px;
+                            font-weight: 800;
+                            margin-bottom: 12px;
+                            width: 100%;
+                            cursor: pointer;
+                        }}
+                        .modal-btn.cancel {{
+                            background-color: #383531;
+                            color: #ffffff;
+                            margin-top: 10px;
+                        }}
+                    </style>
+                </head>
+                <body>
+                    <div class="clock-wrapper">
+                        <!-- TOP CLOCK: BLACK (Clicking starts/stops) -->
+                        <div id="top-card" class="clock-card inactive" onclick="handleTap('black')">
+                            <div class="player-name">♚ {b_name}</div>
+                            <div id="black-time-text" class="timer-digits">0:00</div>
+                            <div id="black-moves-text" class="move-count">Moves: 0</div>
+                        </div>
 
-                top_is_active = (c_state['active'] == 'black' and c_state['running'])
-                bottom_is_active = (c_state['active'] == 'white' and c_state['running'])
+                        <!-- CENTER CONTROL BAR -->
+                        <div class="middle-bar">
+                            <button class="ctrl-btn" onclick="handleReset()" title="Reset Clocks">↻</button>
+                            <button id="pause-btn" class="ctrl-btn" onclick="handlePause()" title="Pause / Resume">▶</button>
+                            <button class="ctrl-btn" onclick="openResultModal()" title="Finish & Record Result">🏁</button>
+                            <button class="ctrl-btn" onclick="goToList()" title="Match List">📋</button>
+                        </div>
 
-                top_class = "active-green" if top_is_active else "inactive-gray"
-                bottom_class = "active-green" if bottom_is_active else "inactive-gray"
-                
-                b_time_str = fmt_time(c_state['black_time'])
-                w_time_str = fmt_time(c_state['white_time'])
+                        <!-- BOTTOM CLOCK: WHITE (Clicking starts/stops) -->
+                        <div id="bottom-card" class="clock-card active" onclick="handleTap('white')">
+                            <div class="player-name">♔ {w_name}</div>
+                            <div id="white-time-text" class="timer-digits">0:00</div>
+                            <div id="white-moves-text" class="move-count">Moves: 0</div>
+                        </div>
 
-                st.markdown("<div class='clock-frame'>", unsafe_allow_html=True)
-
-                # ================= TOP HALF (BLACK - ROTATED 180°) =================
-                st.markdown(f"""
-                <div class="clock-touch-half">
-                    <div class="clock-visual-panel top-inverted {top_class}">
-                        <div class="player-tag">♚ {match['black_name']}</div>
-                        <div class="clock-digits">{b_time_str}</div>
-                        <div class="moves-badge">Moves: {c_state.get('black_moves', 0)}</div>
+                        <!-- RESULT SELECTION MODAL -->
+                        <div id="result-modal">
+                            <div class="modal-title">🏆 Select Match Outcome</div>
+                            <button class="modal-btn" onclick="confirmWinner('1-0')">♔ White Wins ({w_name}) - 1-0</button>
+                            <button class="modal-btn" onclick="confirmWinner('0-1')">♚ Black Wins ({b_name}) - 0-1</button>
+                            <button class="modal-btn" onclick="confirmWinner('½-½')">🤝 Draw - ½-½</button>
+                            <button class="modal-btn cancel" onclick="closeResultModal()">Back to Clock</button>
+                        </div>
                     </div>
-                """, unsafe_allow_html=True)
+
+                    <script>
+                        const matchId = {match_id};
+                        let whiteTime = {w_time};
+                        let blackTime = {b_time};
+                        const increment = {increment};
+                        
+                        let activeTurn = null; // null initially, or 'white' / 'black'
+                        let isRunning = false;
+                        let whiteMoves = 0;
+                        let blackMoves = 0;
+                        let interval = null;
+
+                        const topCard = document.getElementById('top-card');
+                        const bottomCard = document.getElementById('bottom-card');
+                        const whiteTimeText = document.getElementById('white-time-text');
+                        const blackTimeText = document.getElementById('black-time-text');
+                        const whiteMovesText = document.getElementById('white-moves-text');
+                        const blackMovesText = document.getElementById('black-moves-text');
+                        const pauseBtn = document.getElementById('pause-btn');
+                        const resultModal = document.getElementById('result-modal');
+
+                        function fmt(sec) {{
+                            const m = Math.floor(sec / 60);
+                            const s = Math.floor(sec % 60);
+                            return `${{m}}:${{s < 10 ? '0' : ''}}${{s}}`;
+                        }}
+
+                        function updateUI() {{
+                            whiteTimeText.innerText = fmt(whiteTime);
+                            blackTimeText.innerText = fmt(blackTime);
+                            whiteMovesText.innerText = 'Moves: ' + whiteMoves;
+                            blackMovesText.innerText = 'Moves: ' + blackMoves;
+                            pauseBtn.innerText = isRunning ? '⏸' : '▶';
+
+                            if (activeTurn === 'white' && isRunning) {{
+                                bottomCard.className = 'clock-card active';
+                                topCard.className = 'clock-card inactive';
+                            }} else if (activeTurn === 'black' && isRunning) {{
+                                topCard.className = 'clock-card active';
+                                bottomCard.className = 'clock-card inactive';
+                            }} else {{
+                                topCard.className = 'clock-card inactive';
+                                bottomCard.className = 'clock-card inactive';
+                            }}
+
+                            if (whiteTime <= 0) bottomCard.className = 'clock-card timeout';
+                            if (blackTime <= 0) topCard.className = 'clock-card timeout';
+                        }}
+
+                        function tick() {{
+                            if (!isRunning) return;
+                            if (activeTurn === 'white') {{
+                                whiteTime = Math.max(0, whiteTime - 1);
+                                if (whiteTime === 0) {{
+                                    isRunning = false;
+                                    clearInterval(interval);
+                                }}
+                            }} else if (activeTurn === 'black') {{
+                                blackTime = Math.max(0, blackTime - 1);
+                                if (blackTime === 0) {{
+                                    isRunning = false;
+                                    clearInterval(interval);
+                                }}
+                            }}
+                            updateUI();
+                        }}
+
+                        // Click handlers for the entire colored box
+                        function handleTap(side) {{
+                            if (whiteTime <= 0 || blackTime <= 0) return;
+
+                            if (!isRunning) {{
+                                isRunning = true;
+                                activeTurn = (side === 'white') ? 'black' : 'white';
+                                if (interval) clearInterval(interval);
+                                interval = setInterval(tick, 1000);
+                            }} else {{
+                                if (side === 'white' && activeTurn === 'white') {{
+                                    whiteTime += increment;
+                                    whiteMoves++;
+                                    activeTurn = 'black';
+                                }} else if (side === 'black' && activeTurn === 'black') {{
+                                    blackTime += increment;
+                                    blackMoves++;
+                                    activeTurn = 'white';
+                                }}
+                            }}
+                            updateUI();
+                        }}
+
+                        function handlePause() {{
+                            if (isRunning) {{
+                                isRunning = false;
+                                clearInterval(interval);
+                            }} else {{
+                                if (!activeTurn) activeTurn = 'white';
+                                isRunning = true;
+                                if (interval) clearInterval(interval);
+                                interval = setInterval(tick, 1000);
+                            }}
+                            updateUI();
+                        }}
+
+                        function handleReset() {{
+                            if (confirm("Reset clock timers to start?")) {{
+                                isRunning = false;
+                                clearInterval(interval);
+                                whiteTime = {w_time};
+                                blackTime = {b_time};
+                                activeTurn = null;
+                                whiteMoves = 0;
+                                blackMoves = 0;
+                                updateUI();
+                            }}
+                        }}
+
+                        function openResultModal() {{
+                            isRunning = false;
+                            clearInterval(interval);
+                            updateUI();
+                            resultModal.style.display = 'flex';
+                        }}
+
+                        function closeResultModal() {{
+                            resultModal.style.display = 'none';
+                        }}
+
+                        function confirmWinner(res) {{
+                            window.parent.location.search = `?finish_m_id=${{matchId}}&m_result=${{encodeURIComponent(res)}}`;
+                        }}
+
+                        function goToList() {{
+                            window.parent.location.search = `?nav_matches=1`;
+                        }}
+
+                        // Initialize clock
+                        updateUI();
+                    </script>
+                </body>
+                </html>
+                """
                 
-                # Invisible full-coverage button for Black
-                tap_black = st.button("TAP_BLACK_TRIGGER", key="tap_black_btn")
-                st.markdown("</div>", unsafe_allow_html=True)
-
-                # ================= CENTER CONTROL BAR =================
-                st.markdown("<div class='center-control-bar'>", unsafe_allow_html=True)
-                ctrl1, ctrl2, ctrl3, ctrl4 = st.columns(4)
-                with ctrl1:
-                    btn_reset = st.button("↻", key="c_reset", help="Reset Clocks")
-                with ctrl2:
-                    pause_symbol = "▶" if not c_state['running'] else "⏸"
-                    btn_pause = st.button(pause_symbol, key="c_pause", help="Pause / Resume")
-                with ctrl3:
-                    btn_finish = st.button("🏁", key="c_finish", help="End Game & Select Winner")
-                with ctrl4:
-                    btn_list = st.button("📋", key="c_list", help="Back to Match List")
-                st.markdown("</div>", unsafe_allow_html=True)
-
-                # ================= BOTTOM HALF (WHITE - NORMAL ORIENTATION) =================
-                st.markdown(f"""
-                <div class="clock-touch-half">
-                    <div class="clock-visual-panel {bottom_class}">
-                        <div class="player-tag">♔ {match['white_name']}</div>
-                        <div class="clock-digits">{w_time_str}</div>
-                        <div class="moves-badge">Moves: {c_state.get('white_moves', 0)}</div>
-                    </div>
-                """, unsafe_allow_html=True)
+                # Render the zero-lag fullscreen dual touch clock
+                components.html(clock_html, height=660, scrolling=False)
                 
-                # Invisible full-coverage button for White
-                tap_white = st.button("TAP_WHITE_TRIGGER", key="tap_white_btn")
-                st.markdown("</div>", unsafe_allow_html=True)
-
-                st.markdown("</div>", unsafe_allow_html=True) # End clock-frame
-
-                # ================= TAP & INTERACTION LOGIC =================
-                # 1. White Taps (Bottom)
-                if tap_white:
-                    if not c_state['running']:
-                        # First move of the game starts Black's clock
-                        c_state['running'] = True
-                        c_state['active'] = 'black'
-                        c_state['white_moves'] = c_state.get('white_moves', 0) + 1
-                        c_state['white_time'] += match['increment_secs']
-                    elif c_state['active'] == 'white':
-                        # White completed their turn -> switch to Black
-                        c_state['active'] = 'black'
-                        c_state['white_moves'] = c_state.get('white_moves', 0) + 1
-                        c_state['white_time'] += match['increment_secs']
-                    safe_rerun()
-
-                # 2. Black Taps (Top)
-                if tap_black:
-                    if not c_state['running']:
-                        c_state['running'] = True
-                        c_state['active'] = 'white'
-                        c_state['black_moves'] = c_state.get('black_moves', 0) + 1
-                        c_state['black_time'] += match['increment_secs']
-                    elif c_state['active'] == 'black':
-                        # Black completed their turn -> switch to White
-                        c_state['active'] = 'white'
-                        c_state['black_moves'] = c_state.get('black_moves', 0) + 1
-                        c_state['black_time'] += match['increment_secs']
-                    safe_rerun()
-
-                # 3. Center Controls
-                if btn_pause:
-                    c_state['running'] = not c_state['running']
-                    safe_rerun()
-
-                if btn_reset:
-                    c_state['white_time'] = match['white_time_left']
-                    c_state['black_time'] = match['black_time_left']
-                    c_state['active'] = 'white'
-                    c_state['running'] = False
-                    c_state['white_moves'] = 0
-                    c_state['black_moves'] = 0
-                    safe_rerun()
-
-                if btn_finish:
-                    c_state['running'] = False
-                    st.session_state.show_result_modal = True
-                    safe_rerun()
-
-                if btn_list:
-                    st.session_state.active_match_id = None
-                    safe_rerun()
-
-                # 4. Timer Countdown Loop
-                if c_state['running']:
-                    now = time.time()
-                    elapsed = now - c_state['last_tick']
-                    c_state['last_tick'] = now
-                    
-                    if c_state['active'] == 'white':
-                        c_state['white_time'] = max(0.0, c_state['white_time'] - elapsed)
-                        if c_state['white_time'] <= 0:
-                            c_state['running'] = False
-                    elif c_state['active'] == 'black':
-                        c_state['black_time'] = max(0.0, c_state['black_time'] - elapsed)
-                        if c_state['black_time'] <= 0:
-                            c_state['running'] = False
-                            
-                    time.sleep(0.3)
-                    safe_rerun()
-                else:
-                    c_state['last_tick'] = time.time()
-
-                # 5. Result Recording Dialog
-                if st.session_state.get('show_result_modal', False):
-                    st.markdown("---")
-                    st.markdown("### 🏆 Select Match Winner")
-                    res_choice = st.radio("Outcome", [
-                        f"♔ White Wins ({match['white_name']}) - 1-0",
-                        f"♚ Black Wins ({match['black_name']}) - 0-1",
-                        "🤝 Draw - ½-½"
-                    ])
-                    if st.button("💾 Save Match Result"):
-                        result_str = "1-0" if "1-0" in res_choice else ("0-1" if "0-1" in res_choice else "½-½")
-                        conn.execute("UPDATE matches SET status = 'Completed', result = ? WHERE id = ?", (result_str, match['id']))
-                        conn.commit()
-                        check_or_create_grand_final(conn, t_id)
-                        st.session_state.show_result_modal = False
-                        st.session_state.active_match_id = None
-                        st.success("Result recorded successfully!")
-                        safe_rerun()
-
     conn.close()
-
 # ----------------------------------------------------
 # 6. STANDINGS & TOP 2 FINAL (POINTS TABLE + VISUAL BRACKET)
 # ----------------------------------------------------
